@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "diskuh"
+version = "0.1.0"
+description = "du, but with attractive human-readable CLI output and an optional TUI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "ploskon", email = "ploskon@gmail.com" }]
+dependencies = [
+    "click>=8.1",
+    "rich>=13.7",
+    "textual>=0.58",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+diskuh = "diskuh.cli:main"
+diskuh-tui = "diskuh.cli:tui_main"
+dhx = "diskuh.cli:main"
+dhx-tui = "diskuh.cli:tui_main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/diskuh"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+resume_claude.sh
