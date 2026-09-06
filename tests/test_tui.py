@@ -58,6 +58,37 @@ async def test_multi_level_tree_shows_nested_entries_with_connectors(tmp_path, m
 
 
 @pytest.mark.asyncio
+async def test_info_toggle_adds_and_removes_date_columns(app_root):
+    app = BrowserApp(app_root)
+    async with app.run_test() as pilot:
+        await _wait_loaded(app, pilot)
+        table = app.query_one("#entries")
+        assert len(table.columns) == 3
+        assert app.show_info is False
+
+        await pilot.press("i")
+        await _wait_loaded(app, pilot)
+        assert app.show_info is True
+        assert len(table.columns) == 5
+        cols = list(table.columns.keys())
+        row = next(iter(table.rows.keys()))
+        modified = table.get_cell(row, cols[3])
+        created = table.get_cell(row, cols[4])
+        # A real timestamp string, not just a placeholder -- tui.py's
+        # _format_timestamp uses "YYYY-MM-DD HH:MM". Modified is always
+        # available; created (st_birthtime) isn't on every platform, so
+        # it's allowed to be the "—" placeholder instead.
+        assert modified != "—"
+        assert len(modified) == len("2026-01-01 00:00")
+        assert created == "—" or len(created) == len("2026-01-01 00:00")
+
+        await pilot.press("i")
+        await _wait_loaded(app, pilot)
+        assert app.show_info is False
+        assert len(table.columns) == 3
+
+
+@pytest.mark.asyncio
 async def test_drill_down_and_up(app_root):
     app = BrowserApp(app_root)
     async with app.run_test() as pilot:

@@ -8,6 +8,7 @@ import asyncio
 import os
 import shutil
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +38,30 @@ _DEFAULT_TREE_DEPTH = 3
 _PROGRESS_UPDATE_INTERVAL = 1.0
 
 from diskuh import cache, format as fmt
+
+_DATE_FORMAT = "%Y-%m-%d %H:%M"
+
+
+def _format_timestamp(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    return datetime.fromtimestamp(seconds).strftime(_DATE_FORMAT)
+
+
+def _modified_and_created(path: Path) -> tuple[str, str]:
+    """Best-effort modified/created timestamps for the 'i' info toggle.
+    Creation time (`st_birthtime`) is a macOS/BSD stat extension -- not
+    reliably available on Linux (depends on filesystem/kernel/Python
+    version), so it's shown as "—" wherever it isn't. A file that's since
+    been deleted or gone inaccessible shows "—" for both rather than
+    raising."""
+    try:
+        st = path.stat()
+    except OSError:
+        return "—", "—"
+    modified = _format_timestamp(st.st_mtime)
+    created = _format_timestamp(getattr(st, "st_birthtime", None))
+    return modified, created
 
 
 class ConfirmDeleteScreen(ModalScreen[bool]):
@@ -193,7 +218,8 @@ class BrowserApp(App):
     row. Enter drills down (rooting the view at whatever row is selected,
     at any depth shown), backspace goes up, 'd' deletes (with
     confirmation), 's' toggles sort order, 'n' sets how many entries to
-    show per directory level (default: unlimited)."""
+    show per directory level (default: unlimited), 'i' toggles showing
+    each entry's modified/created dates."""
 
     TITLE = "diskuh"
 
@@ -209,6 +235,7 @@ class BrowserApp(App):
         Binding("d", "delete_selected", "Delete"),
         Binding("s", "cycle_sort", "Sort"),
         Binding("n", "set_limit", "Limit"),
+        Binding("i", "toggle_info", "Info"),
         Binding("r", "rescan", "Rescan"),
         Binding("q", "quit", "Quit"),
     ]
@@ -222,6 +249,8 @@ class BrowserApp(App):
         # --head); None = unlimited. Set by 'n'. Same default as the CLI.
         self.limit: int | None = fmt.DEFAULT_HEAD
         self.tree_depth = _DEFAULT_TREE_DEPTH
+        # 'i' toggles an extra Modified/Created column pair per entry.
+        self.show_info = False
         self.conn = cache.connect()
         cache.init_schema(self.conn)
         # `exclusive=True` on _scan_worker stops tracking a superseded scan,
@@ -305,7 +334,10 @@ class BrowserApp(App):
             return  # superseded by a newer navigation; discard
         table = self.query_one("#entries", DataTable)
         table.clear(columns=True)
-        table.add_columns("Size", "", "Name")
+        if self.show_info:
+            table.add_columns("Size", "", "Name", "Modified", "Created")
+        else:
+            table.add_columns("Size", "", "Name")
 
         sizes = [entry.size for _, entry, _ in entries]
         max_size = max(sizes, default=1) or 1
@@ -315,12 +347,11 @@ class BrowserApp(App):
             # misinterpreted as Rich style tags instead of shown as-is.
             safe_name = _escape_markup(entry.path.name) + ("/" if entry.is_dir else "")
             name = f"[dim]{prefix}[/dim]{safe_name}"
-            table.add_row(
-                fmt.human_size(entry.size),
-                fmt.render_bar(entry.size, max_size),
-                name,
-                key=str(entry.path),
-            )
+            row = [fmt.human_size(entry.size), fmt.render_bar(entry.size, max_size), name]
+            if self.show_info:
+                modified, created = _modified_and_created(entry.path)
+                row += [modified, created]
+            table.add_row(*row, key=str(entry.path))
         table.loading = False
 
         limit_note = f", head {self.limit}" if self.limit is not None else ""
@@ -373,6 +404,10 @@ class BrowserApp(App):
 
     def action_cycle_sort(self) -> None:
         self.sort_by_size = not self.sort_by_size
+        self._load(self.current_path)
+
+    def action_toggle_info(self) -> None:
+        self.show_info = not self.show_info
         self._load(self.current_path)
 
     def action_rescan(self) -> None:

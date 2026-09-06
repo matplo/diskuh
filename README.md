@@ -34,7 +34,10 @@ subtrees. See `src/diskuh/cache.py` for the exact staleness algorithm and its
 documented limitations.
 
 In the TUI, press `d` on a selected entry to delete it (after confirmation).
-Deletion is **permanent** — there is no trash/undo.
+Deletion is **permanent** — there is no trash/undo. Press `i` to toggle
+Modified/Created date columns for every visible entry (Created is a
+macOS/BSD stat extension and shows as `—` where the platform doesn't
+support it).
 
 ## Development
 
