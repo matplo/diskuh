@@ -44,3 +44,23 @@ support it).
 ```bash
 henv --name duh-dev -x pytest -v
 ```
+
+## Releasing
+
+Published to PyPI via GitHub Actions using
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no
+API tokens involved. To cut a release:
+
+1. Bump `version` in **both** `pyproject.toml` and `src/diskuh/__init__.py`.
+2. Commit, then tag and push:
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z: <summary>"
+   git push origin vX.Y.Z
+   ```
+3. `.github/workflows/publish.yml` builds, validates with `twine check`, and
+   publishes automatically. Watch it at
+   `gh run watch --repo matplo/diskuh` or the Actions tab.
+
+PyPI's installable index can lag its own JSON API by up to ~30s after a
+publish — a `pip install` that briefly shows the previous version doesn't
+mean the release failed; retry after a short wait.
