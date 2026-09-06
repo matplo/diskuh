@@ -35,9 +35,11 @@ documented limitations.
 
 In the TUI, press `d` on a selected entry to delete it (after confirmation).
 Deletion is **permanent** — there is no trash/undo. Press `i` to toggle
-Modified/Created date columns for every visible entry (Created is a
-macOS/BSD stat extension and shows as `—` where the platform doesn't
-support it).
+Modified/Created date columns for every visible entry. Created works via
+`st_birthtime` on macOS/BSD, and via the `statx()` syscall on Linux
+(kernel 4.11+/glibc or musl since ~2018) — shows `—` only where neither is
+available (very old Linux, or a filesystem that doesn't track a birth time
+at all, e.g. some network filesystems).
 
 ## Development
 

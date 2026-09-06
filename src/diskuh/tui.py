@@ -38,6 +38,7 @@ _DEFAULT_TREE_DEPTH = 3
 _PROGRESS_UPDATE_INTERVAL = 1.0
 
 from diskuh import cache, format as fmt
+from diskuh._statx import get_birthtime
 
 _DATE_FORMAT = "%Y-%m-%d %H:%M"
 
@@ -50,17 +51,18 @@ def _format_timestamp(seconds: float | None) -> str:
 
 def _modified_and_created(path: Path) -> tuple[str, str]:
     """Best-effort modified/created timestamps for the 'i' info toggle.
-    Creation time (`st_birthtime`) is a macOS/BSD stat extension -- not
-    reliably available on Linux (depends on filesystem/kernel/Python
-    version), so it's shown as "—" wherever it isn't. A file that's since
-    been deleted or gone inaccessible shows "—" for both rather than
+    Creation time is a macOS/BSD `st_birthtime` stat() extension, or on
+    Linux a best-effort `statx()` call (see `diskuh._statx`) -- still "—"
+    wherever neither is available (old kernel/libc, or a filesystem that
+    just doesn't track a birth time at all, e.g. tmpfs). A file that's
+    since been deleted or gone inaccessible shows "—" for both rather than
     raising."""
     try:
         st = path.stat()
     except OSError:
         return "—", "—"
     modified = _format_timestamp(st.st_mtime)
-    created = _format_timestamp(getattr(st, "st_birthtime", None))
+    created = _format_timestamp(get_birthtime(path, st))
     return modified, created
 
 
