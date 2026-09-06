@@ -57,6 +57,16 @@ This only bridges one level per trusted hop, though: an error several
 levels below multiple nested trusted ancestors may not resurface until
 something along that chain changes (or `--no-cache` is used) -- the same
 class of trade-off as the staleness blind spot above.
+
+Writes within a single `get_or_refresh()` call are batched into one
+`conn.commit()` at the end (see `_store_row`'s `commit` parameter), not one
+per directory. An earlier version committed after every single row, which
+turned out to be the dominant cost of a cold scan on a large tree -- a
+commit is an fsync-class operation, so scanning N directories did N of them,
+independent of and often exceeding the actual filesystem-walk cost. Combined
+with `PRAGMA synchronous = NORMAL` (safe under WAL, see `connect()`), this is
+what makes a cold `diskuh` scan competitive with plain `du` instead of
+dramatically slower than it.
 """
 
 from __future__ import annotations
@@ -115,6 +125,14 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # same-thread restriction is safe here.
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA journal_mode = WAL")
+    # NORMAL only fsyncs at checkpoints instead of FULL's fsync-on-every-
+    # commit -- SQLite's own docs call this safe specifically in combination
+    # with WAL (set just above): an app crash still can't corrupt the
+    # database, and the worst an OS crash/power loss can do is lose the most
+    # recent commit. An acceptable trade for a disposable, rebuildable local
+    # cache, and the other half of what makes batching commits (see
+    # get_or_refresh) actually pay off.
+    conn.execute("PRAGMA synchronous = NORMAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
@@ -184,6 +202,7 @@ def _store_row(
     agg_size: int,
     agg_file_count: int,
     error: str | None = None,
+    commit: bool = True,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -215,7 +234,8 @@ def _store_row(
             error,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _check_dir(
@@ -329,7 +349,9 @@ def get_or_refresh(
             except OSError:
                 mtime_ns = 0
             node.mtime_ns = mtime_ns
-            _store_row(conn, root_id, node.path, mtime_ns, 0, "", 0, 0, error=err_msg)
+            _store_row(
+                conn, root_id, node.path, mtime_ns, 0, "", 0, 0, error=err_msg, commit=False
+            )
             continue
         node.mtime_ns = st.st_mtime_ns
         node.entry_count = entry_count
@@ -397,7 +419,17 @@ def get_or_refresh(
             fingerprints[str(node.path)],
             node.size,
             node.file_count,
+            commit=False,
         )
+
+    # Every _store_row() call above (and the OSError branch further up) ran
+    # with commit=False -- this single commit covers all of them in one
+    # fsync instead of one per directory, which used to dominate cold-scan
+    # time on large trees (commit-per-row was the actual bottleneck behind
+    # "diskuh is way slower than du" -- see the module docstring/cache
+    # design notes). Unconditional, so it's a harmless no-op if this call
+    # touched nothing at all (e.g. every directory was already trusted).
+    conn.commit()
 
     return root_node
 

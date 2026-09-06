@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import time
 
@@ -194,3 +195,52 @@ def test_is_cached(tree_factory, tmp_path):
     # A nonexistent path is reported as "cached" (nothing expensive would
     # happen if you tried) rather than raising.
     assert cache.is_cached(conn, root, root / "does-not-exist") is True
+
+
+def test_connect_sets_synchronous_normal(tmp_path):
+    conn = cache.connect(tmp_path / "cache.sqlite3")
+    row = conn.execute("PRAGMA synchronous").fetchone()
+    assert row[0] == 1  # 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA
+
+
+def test_get_or_refresh_batches_commits(tree_factory, tmp_path, monkeypatch):
+    # Regression: _store_row() used to call conn.commit() unconditionally,
+    # once per directory in get_or_refresh()'s post-order aggregation loop
+    # (and once more inline for any directory that raised OSError) -- an
+    # unbatched fsync-class call per directory that dominated cold-scan time
+    # on large trees. Assert the number of real commits stays small and
+    # constant, not O(directory count).
+    #
+    # sqlite3.Connection is an immutable C type: neither
+    # `sqlite3.Connection.commit = ...` nor instance-level
+    # `conn.commit = ...` works (both raise) the way monkeypatching
+    # os.scandir does elsewhere in this file. Instead, inject a Connection
+    # *subclass* via sqlite3.connect()'s `factory=` argument, overriding
+    # commit() there.
+    commit_calls = []
+
+    class CountingConnection(sqlite3.Connection):
+        def commit(self):
+            commit_calls.append(1)
+            return super().commit()
+
+    real_connect = cache.sqlite3.connect
+
+    def connect_with_factory(*args, **kwargs):
+        kwargs.setdefault("factory", CountingConnection)
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(cache.sqlite3, "connect", connect_with_factory)
+
+    # Several directories -- if commits scaled with directory count, this
+    # would show up immediately even at this small size.
+    root = tree_factory({f"d{i}": {"f.txt": SMALL} for i in range(20)})
+    conn = _connect(tmp_path)
+
+    commit_calls.clear()  # ignore init_schema()'s own setup commit(s)
+    cache.get_or_refresh(conn, root, root)
+
+    # One commit from _get_root_id() (unchanged -- already a single
+    # per-call commit, not per-directory) plus one final batched commit
+    # from get_or_refresh() itself, regardless of the 20 directories above.
+    assert len(commit_calls) <= 2
