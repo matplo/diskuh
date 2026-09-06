@@ -4,16 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "diskuh"
-version = "0.1.0"
+version = "0.1.1"
 description = "du, but with attractive human-readable CLI output and an optional TUI"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "ploskon", email = "ploskon@gmail.com" }]
 dependencies = [
     "click>=8.1",
     "rich>=13.7",
-    "textual>=0.58",
+    "textual>=8.2,<9",
 ]
 
 [project.optional-dependencies]
