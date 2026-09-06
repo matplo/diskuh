@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from textual.widgets import Input
 
 from diskuh.tui import BrowserApp
 
@@ -86,6 +87,96 @@ async def test_info_toggle_adds_and_removes_date_columns(app_root):
         await _wait_loaded(app, pilot)
         assert app.show_info is False
         assert len(table.columns) == 3
+
+
+@pytest.mark.asyncio
+async def test_initial_depth_constructor_arg(tmp_path, monkeypatch):
+    db_dir = tmp_path.parent / (tmp_path.name + "-cachedb")
+    monkeypatch.setattr("diskuh.cache.DB_PATH", db_dir / "cache.sqlite3")
+    monkeypatch.setattr("diskuh.cache.DB_DIR", db_dir)
+
+    from conftest import make_tree
+
+    make_tree(tmp_path, {"outer": {"inner": {"deep.txt": 500}}})
+
+    # Mirrors how cli.py's _tui_kwargs_for_depth wires --depth/-l through.
+    app = BrowserApp(tmp_path, initial_depth=1)
+    async with app.run_test() as pilot:
+        await _wait_loaded(app, pilot)
+        assert app.tree_depth == 1
+        table = app.query_one("#entries")
+        assert table.row_count == 1  # only "outer" -- inner/deep.txt cut off
+
+
+@pytest.mark.asyncio
+async def test_depth_modal_sets_tree_depth_and_reveals_deeper_rows(tmp_path, monkeypatch):
+    db_dir = tmp_path.parent / (tmp_path.name + "-cachedb")
+    monkeypatch.setattr("diskuh.cache.DB_PATH", db_dir / "cache.sqlite3")
+    monkeypatch.setattr("diskuh.cache.DB_DIR", db_dir)
+
+    from conftest import make_tree
+
+    make_tree(tmp_path, {"outer": {"inner": {"deep.txt": 500}}})
+
+    app = BrowserApp(tmp_path, initial_depth=1)
+    async with app.run_test() as pilot:
+        await _wait_loaded(app, pilot)
+        table = app.query_one("#entries")
+        assert table.row_count == 1
+
+        await pilot.press("l")
+        await pilot.pause(0.1)
+        await pilot.press("3")
+        await pilot.press("enter")
+        await _wait_loaded(app, pilot)
+
+        assert app.tree_depth == 3
+        assert table.row_count == 3  # outer, inner, deep.txt all visible
+        assert ", depth 3" in app.sub_title
+
+
+@pytest.mark.asyncio
+async def test_depth_modal_blank_means_unlimited(tmp_path, monkeypatch):
+    db_dir = tmp_path.parent / (tmp_path.name + "-cachedb")
+    monkeypatch.setattr("diskuh.cache.DB_PATH", db_dir / "cache.sqlite3")
+    monkeypatch.setattr("diskuh.cache.DB_DIR", db_dir)
+
+    from conftest import make_tree
+
+    make_tree(tmp_path, {"outer": {"inner": {"deepest": {"f.txt": 500}}}})
+
+    app = BrowserApp(tmp_path, initial_depth=2)
+    async with app.run_test() as pilot:
+        await _wait_loaded(app, pilot)
+        assert app.query_one("#entries").row_count == 2  # outer, inner only
+
+        await pilot.press("l")
+        await pilot.pause(0.1)
+        app.screen.query_one(Input).value = ""  # clear the pre-filled "2"
+        await pilot.press("enter")
+        await _wait_loaded(app, pilot)
+
+        assert app.tree_depth is None
+        # outer, inner, deepest, and its file f.txt all now visible (was
+        # cut off at "outer, inner" only when depth=2).
+        assert app.query_one("#entries").row_count == 4
+        assert ", depth" not in app.sub_title  # omitted when unlimited, like head
+
+
+@pytest.mark.asyncio
+async def test_depth_modal_escape_cancels_unchanged(app_root):
+    app = BrowserApp(app_root)
+    async with app.run_test() as pilot:
+        await _wait_loaded(app, pilot)
+        original_depth = app.tree_depth
+
+        await pilot.press("l")
+        await pilot.pause(0.1)
+        await pilot.press("escape")
+        await pilot.pause(0.1)
+
+        assert app.tree_depth == original_depth
+        assert len(app.screen_stack) == 1
 
 
 @pytest.mark.asyncio

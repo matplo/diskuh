@@ -20,14 +20,15 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static
 
-# How many levels of subdirectories to show at once, like `--depth` on the
-# CLI (see format.collect_entries) -- not yet user-adjustable from within
-# the TUI. Kept finite rather than unlimited so a single navigation can't
-# balloon into rendering an enormous number of rows for a very deep tree;
-# in practice showing more levels costs little extra scanning; the
-# directory being displayed was already fully resolved (to compute its own
-# accurate total) by the time it's shown, so expanding a few more of its
-# already-cached descendants for display is normally close to free.
+# Default for how many levels of subdirectories to show at once, like
+# `--depth` on the CLI (see format.collect_entries). Adjustable at runtime
+# via 'l', or at launch via --depth/-l. Kept finite by default rather than
+# unlimited so a single navigation can't balloon into rendering an enormous
+# number of rows for a very deep tree; in practice showing more levels
+# costs little extra scanning -- the directory being displayed was already
+# fully resolved (to compute its own accurate total) by the time it's
+# shown, so expanding a few more of its already-cached descendants for
+# display is normally close to free.
 _DEFAULT_TREE_DEPTH = 3
 
 # How often the scanning status line actually redraws. on_progress fires
@@ -158,16 +159,17 @@ class ExpensiveScanConfirmScreen(ModalScreen[bool]):
         self.dismiss(event.button.id == "scan")
 
 
-class LimitInputScreen(ModalScreen[Optional[int]]):
-    """Modal: type how many entries to show per directory level (like the
-    CLI's --head). Blank clears the limit (unlimited); Escape cancels
-    unchanged."""
+class IntInputScreen(ModalScreen[Optional[int]]):
+    """Generic modal: type a positive whole number, or leave it blank for
+    "unlimited". Shared by the 'n' (per-directory entry cap) and 'l'
+    (recursive depth) prompts -- the validation rules are identical, only
+    the prompt text differs. Escape cancels, leaving the value unchanged."""
 
     DEFAULT_CSS = """
-    LimitInputScreen {
+    IntInputScreen {
         align: center middle;
     }
-    #limit-dialog {
+    #int-input-dialog {
         width: 44;
         height: auto;
         border: thick $primary;
@@ -178,17 +180,18 @@ class LimitInputScreen(ModalScreen[Optional[int]]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
-    def __init__(self, current: int | None) -> None:
+    def __init__(self, current: int | None, prompt: str) -> None:
         super().__init__()
         self._current = current
+        self._prompt = prompt
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="limit-dialog"):
-            yield Static("Show how many entries per directory? (blank = unlimited)")
+        with Vertical(id="int-input-dialog"):
+            yield Static(self._prompt)
             yield Input(
                 value=str(self._current) if self._current else "",
                 placeholder="unlimited",
-                id="limit-input",
+                id="int-input",
             )
 
     def on_mount(self) -> None:
@@ -205,7 +208,7 @@ class LimitInputScreen(ModalScreen[Optional[int]]):
         try:
             n = int(text)
         except ValueError:
-            self.notify("Enter a whole number, or leave blank for auto.", severity="error")
+            self.notify("Enter a whole number, or leave blank for unlimited.", severity="error")
             return
         if n <= 0:
             self.notify("Must be a positive number.", severity="error")
@@ -214,14 +217,15 @@ class LimitInputScreen(ModalScreen[Optional[int]]):
 
 
 class BrowserApp(App):
-    """Browse a directory: a multi-level tree (down to `_DEFAULT_TREE_DEPTH`
-    levels) rooted at the current directory, with `tree`-style connectors
-    (matching the CLI's rendering) and a human size + proportional bar per
-    row. Enter drills down (rooting the view at whatever row is selected,
-    at any depth shown), backspace goes up, 'd' deletes (with
-    confirmation), 's' toggles sort order, 'n' sets how many entries to
-    show per directory level (default: unlimited), 'i' toggles showing
-    each entry's modified/created dates."""
+    """Browse a directory: a multi-level tree (down to `tree_depth` levels,
+    default `_DEFAULT_TREE_DEPTH`) rooted at the current directory, with
+    `tree`-style connectors (matching the CLI's rendering) and a human size
+    + proportional bar per row. Enter drills down (rooting the view at
+    whatever row is selected, at any depth shown), backspace goes up, 'd'
+    deletes (with confirmation), 's' toggles sort order, 'n' sets how many
+    entries to show per directory level (default: unlimited), 'l' sets how
+    many levels deep to show (default: 3), 'i' toggles showing each
+    entry's modified/created dates."""
 
     TITLE = "diskuh"
 
@@ -237,12 +241,13 @@ class BrowserApp(App):
         Binding("d", "delete_selected", "Delete"),
         Binding("s", "cycle_sort", "Sort"),
         Binding("n", "set_limit", "Limit"),
+        Binding("l", "set_depth", "Depth"),
         Binding("i", "toggle_info", "Info"),
         Binding("r", "rescan", "Rescan"),
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, initial_depth: int | None = _DEFAULT_TREE_DEPTH) -> None:
         super().__init__()
         self.root = root
         self.current_path = root
@@ -250,7 +255,10 @@ class BrowserApp(App):
         # How many entries to show per directory level (like the CLI's
         # --head); None = unlimited. Set by 'n'. Same default as the CLI.
         self.limit: int | None = fmt.DEFAULT_HEAD
-        self.tree_depth = _DEFAULT_TREE_DEPTH
+        # How many levels deep to show at once (like the CLI's --depth);
+        # None = unlimited. Set by 'l', or at launch via --depth/-l on
+        # `diskuh --tui`/`diskuh-tui` (see cli.py's _tui_kwargs_for_depth).
+        self.tree_depth: int | None = initial_depth
         # 'i' toggles an extra Modified/Created column pair per entry.
         self.show_info = False
         self.conn = cache.connect()
@@ -357,8 +365,11 @@ class BrowserApp(App):
         table.loading = False
 
         limit_note = f", head {self.limit}" if self.limit is not None else ""
+        depth_note = f", depth {self.tree_depth}" if self.tree_depth is not None else ""
         hidden_note = f"  [{hidden} more not shown]" if hidden > 0 else ""
-        self.sub_title = f"{path}  ({fmt.human_size(node.size)}{limit_note}){hidden_note}"
+        self.sub_title = (
+            f"{path}  ({fmt.human_size(node.size)}{limit_note}{depth_note}){hidden_note}"
+        )
         for err in node.errors:
             self.notify(err, severity="warning", timeout=5)
 
@@ -417,8 +428,20 @@ class BrowserApp(App):
 
     @work
     async def action_set_limit(self) -> None:
-        result = await self.push_screen_wait(LimitInputScreen(self.limit))
+        result = await self.push_screen_wait(
+            IntInputScreen(
+                self.limit, prompt="Show how many entries per directory? (blank = unlimited)"
+            )
+        )
         self.limit = result
+        self._load(self.current_path)
+
+    @work
+    async def action_set_depth(self) -> None:
+        result = await self.push_screen_wait(
+            IntInputScreen(self.tree_depth, prompt="Show how many levels deep? (blank = unlimited)")
+        )
+        self.tree_depth = result
         self._load(self.current_path)
 
     @work
@@ -442,5 +465,5 @@ class BrowserApp(App):
         self._load(self.current_path)
 
 
-def run_tui(root: Path) -> None:
-    BrowserApp(root).run()
+def run_tui(root: Path, *, initial_depth: int | None = _DEFAULT_TREE_DEPTH) -> None:
+    BrowserApp(root, initial_depth=initial_depth).run()

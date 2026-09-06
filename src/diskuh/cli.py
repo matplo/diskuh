@@ -51,6 +51,23 @@ def _scan_progress(console: Console):
         yield on_progress
 
 
+def _validate_depth(depth: int | None) -> None:
+    if depth is not None and depth < 0:
+        raise click.UsageError("--depth must be 0 (unlimited) or a positive integer.")
+
+
+def _tui_kwargs_for_depth(depth: int | None) -> dict:
+    """Resolve --depth into run_tui()'s initial_depth kwarg. Shared between
+    `main()`'s --tui branch and `tui_main()` so the three-state handling
+    (not given / explicitly 0 / explicit N) isn't duplicated: unspecified
+    means "let the TUI use its own default" (an empty dict, so run_tui's
+    own Python-level default parameter value applies), explicit 0 means
+    unlimited, and N means exactly N levels."""
+    if depth is None:
+        return {}
+    return {"initial_depth": None if depth == 0 else depth}
+
+
 def _report_errors(errors: list[str], *, show_errors: bool) -> None:
     """By default, a scan hitting hundreds of permission-denied
     subdirectories (common under ~/Library on macOS, say) would otherwise
@@ -77,13 +94,13 @@ def _report_errors(errors: list[str], *, show_errors: bool) -> None:
 )
 @click.option(
     "--depth",
-    "-d",
+    "-l",
     "depth",
     type=int,
-    default=1,
-    show_default=True,
+    default=None,
     help="Limit reported directory depth (like du --max-depth); 0 = unlimited. "
-    "Sizes are always accurate regardless of depth.",
+    "Default: 1 for the report, 3 for --tui. Sizes are always accurate "
+    "regardless of depth.",
 )
 @click.option(
     "--terse",
@@ -140,8 +157,7 @@ def main(
     """du, but with attractive human-readable output and an optional TUI."""
     resolved = path.resolve()
 
-    if depth < 0:
-        raise click.UsageError("--depth must be 0 (unlimited) or a positive integer.")
+    _validate_depth(depth)
     if head is not None and head < 0:
         raise click.UsageError("--head must be 0 (unlimited) or a positive integer.")
     if tail is not None and tail <= 0:
@@ -149,7 +165,6 @@ def main(
     if head is not None and head > 0 and tail is not None:
         raise click.UsageError("--head and --tail are mutually exclusive.")
 
-    max_depth = None if depth == 0 else depth
     if head is None and tail is None:
         head = DEFAULT_HEAD  # show only the biggest entries unless told otherwise
     elif head == 0:
@@ -158,8 +173,14 @@ def main(
     if tui:
         from diskuh.tui import run_tui
 
-        run_tui(resolved)
+        run_tui(resolved, **_tui_kwargs_for_depth(depth))
         return
+
+    # Plain report: --depth unspecified defaults to 1 (unlike --tui, which
+    # defaults to run_tui()'s own, deeper default -- see
+    # _tui_kwargs_for_depth).
+    report_depth = 1 if depth is None else depth
+    max_depth = None if report_depth == 0 else report_depth
 
     from diskuh import cache, format as fmt
 
@@ -199,11 +220,20 @@ def main(
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
     default=".",
 )
-def tui_main(path: Path) -> None:
+@click.option(
+    "--depth",
+    "-l",
+    "depth",
+    type=int,
+    default=None,
+    help="How many levels deep to show at once (default: 3); 0 = unlimited.",
+)
+def tui_main(path: Path, depth: int | None) -> None:
     """Launch the diskuh TUI directly."""
+    _validate_depth(depth)
     from diskuh.tui import run_tui
 
-    run_tui(path.resolve())
+    run_tui(path.resolve(), **_tui_kwargs_for_depth(depth))
 
 
 if __name__ == "__main__":

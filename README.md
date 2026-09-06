@@ -21,7 +21,9 @@ diskuh --tail 10 [PATH]       # show only the 10 smallest entries
 diskuh --terse [PATH]         # plain "size<TAB>path" output, script/pipe friendly
 diskuh --no-cache [PATH]      # bypass the cache; force a fresh full scan
 diskuh --tui [PATH]           # launch the full-screen TUI
+diskuh --tui --depth 5 [PATH] # launch the TUI showing 5 levels deep at once (default: 3)
 diskuh-tui [PATH]             # same TUI, dedicated entry point
+diskuh-tui --depth 0 [PATH]   # same TUI, unlimited depth from the start
 
 dhx [PATH]                    # short alias for diskuh (identical, same flags)
 dhx-tui [PATH]                # short alias for diskuh-tui
@@ -39,7 +41,11 @@ Modified/Created date columns for every visible entry. Created works via
 `st_birthtime` on macOS/BSD, and via the `statx()` syscall on Linux
 (kernel 4.11+/glibc or musl since ~2018) — shows `—` only where neither is
 available (very old Linux, or a filesystem that doesn't track a birth time
-at all, e.g. some network filesystems).
+at all, e.g. some network filesystems). Press `n` to set how many entries
+to show per directory level, and `l` to set how many levels deep to show
+at once — both accept blank for unlimited. `--depth`'s short flag is `-l`
+(for "depth-**l**evel"), not `-d`, to avoid any mnemonic overlap with the
+TUI's `d` (delete) binding.
 
 ## Development
 

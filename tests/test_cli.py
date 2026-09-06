@@ -81,6 +81,23 @@ def test_depth_zero_means_unlimited(tree_factory, tmp_path, monkeypatch):
     assert "innermost" in result.output  # the deepest directory is reached
 
 
+def test_depth_short_flag_is_l_not_d(tree_factory, tmp_path, monkeypatch):
+    # -d used to be --depth's short flag; changed to -l ("depth-Level") to
+    # avoid any mnemonic overlap with the TUI's 'd' (delete) binding, even
+    # though they're different input surfaces. -d must no longer work.
+    root = tree_factory({"outer": {"nested": {"c.txt": 100}}})
+    _isolate_cache_db(monkeypatch, tmp_path)
+
+    runner = CliRunner()
+    result_l = runner.invoke(main, ["-l", "2", str(root)])
+    assert result_l.exit_code == 0
+    assert "nested" in result_l.output
+
+    result_d = runner.invoke(main, ["-d", "2", str(root)])
+    assert result_d.exit_code != 0
+    assert "No such option" in result_d.output
+
+
 def test_negative_depth_is_rejected(tree_factory, tmp_path, monkeypatch):
     root = tree_factory({"e.txt": 10})
     _isolate_cache_db(monkeypatch, tmp_path)
@@ -207,3 +224,55 @@ def test_terse_output_is_plain(tree_factory, tmp_path, monkeypatch):
     assert ansi_escape.search(result.output) is None
     lines = [line for line in result.output.splitlines() if line]
     assert any("\t" in line for line in lines)
+
+
+def test_tui_kwargs_for_depth():
+    from diskuh.cli import _tui_kwargs_for_depth
+
+    assert _tui_kwargs_for_depth(None) == {}  # unspecified: let run_tui pick its own default
+    assert _tui_kwargs_for_depth(0) == {"initial_depth": None}  # explicit 0 = unlimited
+    assert _tui_kwargs_for_depth(5) == {"initial_depth": 5}
+
+
+def test_main_tui_flag_passes_depth_through(tree_factory, tmp_path, monkeypatch):
+    root = tree_factory({"a": {"b.txt": 10}})
+    _isolate_cache_db(monkeypatch, tmp_path)
+
+    calls = []
+    monkeypatch.setattr("diskuh.tui.run_tui", lambda *a, **kw: calls.append((a, kw)))
+
+    runner = CliRunner()
+
+    # --depth unspecified -> nothing passed, run_tui uses its own default.
+    result = runner.invoke(main, ["--tui", str(root)])
+    assert result.exit_code == 0
+    assert calls[-1][1] == {}
+
+    # explicit --depth N (via -l) -> forwarded as initial_depth.
+    result = runner.invoke(main, ["--tui", "-l", "5", str(root)])
+    assert result.exit_code == 0
+    assert calls[-1][1] == {"initial_depth": 5}
+
+    # explicit --depth 0 -> unlimited.
+    result = runner.invoke(main, ["--tui", "--depth", "0", str(root)])
+    assert result.exit_code == 0
+    assert calls[-1][1] == {"initial_depth": None}
+
+
+def test_tui_main_passes_depth_through(tree_factory, tmp_path, monkeypatch):
+    root = tree_factory({"a": {"b.txt": 10}})
+    _isolate_cache_db(monkeypatch, tmp_path)
+
+    calls = []
+    monkeypatch.setattr("diskuh.tui.run_tui", lambda *a, **kw: calls.append((a, kw)))
+
+    from diskuh.cli import tui_main
+
+    runner = CliRunner()
+    result = runner.invoke(tui_main, ["-l", "7", str(root)])
+    assert result.exit_code == 0
+    assert calls[-1][1] == {"initial_depth": 7}
+
+    result = runner.invoke(tui_main, [str(root)])
+    assert result.exit_code == 0
+    assert calls[-1][1] == {}
